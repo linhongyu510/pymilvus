@@ -82,6 +82,17 @@ def io_operation(io_func: Callable[[Any], None], message: str):
         raise MilvusException(message=message) from ose
 
 
+def _escape_str_pk(pk: str) -> str:
+    """Escape a VARCHAR primary key for use inside a double-quoted expression literal.
+
+    The Milvus expression grammar (Plan.g4) forbids raw backslashes, double
+    quotes, newlines and carriage returns inside a double-quoted string; each
+    must appear as an EscapeSequence.  Keys without these characters produce
+    the same expression as before.
+    """
+    return pk.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n").replace("\r", "\\r")
+
+
 class QueryIterator:
     def __init__(
         self,
@@ -235,7 +246,10 @@ class QueryIterator:
                 },
                 separators=(",", ":"),
             )
-        return str(self._next_id)
+        # Always JSON-encode so that VARCHAR primary keys containing newline,
+        # tab or quote characters do not break the line-based checkpoint file
+        # (see issue #1960).
+        return json.dumps({"pk": str(self._next_id)}, separators=(",", ":"))
 
     def __restore_cursor_line(self, line: str) -> None:
         cursor_line = line.strip()
@@ -427,7 +441,7 @@ class QueryIterator:
         filtered_pk_str = ""
         pk_op = ">=" if self._has_element_cursor() else ">"
         if self._pk_str:
-            filtered_pk_str = f'{self._pk_field_name} {pk_op} "{self._next_id}"'
+            filtered_pk_str = f'{self._pk_field_name} {pk_op} "{_escape_str_pk(self._next_id)}"'
         else:
             filtered_pk_str = f"{self._pk_field_name} {pk_op} {self._next_id}"
         if current_expr is None or len(current_expr) == 0:
