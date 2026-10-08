@@ -25,6 +25,8 @@ from pymilvus.client.constants import (
 )
 from pymilvus.client.iterator import QueryIterator as ClientQueryIterator
 from pymilvus.client.iterator import QueryIteratorCursor as ClientQueryIteratorCursor
+from pymilvus.client.iterator.query_iterator import _escape_str_pk
+from pymilvus.client.iterator.search_iterator import SearchIterator
 from pymilvus.client.types import DataType
 from pymilvus.exceptions import MilvusException, ServerVersionIncompatibleException
 from pymilvus.milvus_client import milvus_client as milvus_client_module
@@ -647,3 +649,120 @@ def test_milvus_client_preserves_search_v2_public_preparation():
         COLLECTION_ID: 1,
         "context": context,
     }
+
+
+# ---------------------------------------------------------------------------
+# Issue #1960: VARCHAR primary keys must be escaped in iterator expressions
+# ---------------------------------------------------------------------------
+
+_STR_QUERY_SCHEMA = {
+    "fields": [
+        {"name": "doc_text", "type": DataType.VARCHAR, "is_primary": True},
+    ]
+}
+
+
+class _StrQueryHandler:
+    def describe_collection(self, collection_name, **kwargs):
+        return {COLLECTION_ID: 1}
+
+    def query(self, collection_name, **kwargs):
+        return _QueryResult([])
+
+
+def _make_str_query_iterator():
+    handler = _StrQueryHandler()
+    return ClientQueryIterator(
+        handler=handler,
+        context=None,
+        collection_name="c",
+        batch_size=10,
+        expr="",
+        schema=_STR_QUERY_SCHEMA,
+    )
+
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        ("plain", "plain"),
+        ('say "hi"', 'say \\\"hi\\\"'),
+        ("back\\slash", "back\\\\slash"),
+        ("line\nbreak", "line\\nbreak"),
+        ("line\rbreak", "line\\rbreak"),
+        ('mixed "\n\\', 'mixed \\\"\\n\\\\'),
+    ],
+)
+def test_escape_str_pk_escapes_special_chars(raw, expected):
+    assert _escape_str_pk(raw) == expected
+
+
+def test_query_iterator_next_expr_plain_varchar_pk():
+    it = _make_str_query_iterator()
+    it._next_id = "plain"
+    assert it._QueryIterator__setup_next_expr() == 'doc_text > "plain"'
+
+
+def test_query_iterator_next_expr_varchar_pk_with_quote():
+    it = _make_str_query_iterator()
+    it._next_id = 'say "hi"'
+    assert it._QueryIterator__setup_next_expr() == 'doc_text > "say \\\"hi\\\""'
+
+
+def test_query_iterator_next_expr_varchar_pk_with_newline():
+    it = _make_str_query_iterator()
+    it._next_id = "line\nbreak"
+    assert it._QueryIterator__setup_next_expr() == 'doc_text > "line\\nbreak"'
+
+
+def test_query_iterator_next_expr_element_cursor_uses_ge():
+    it = _make_str_query_iterator()
+    it._next_id = 'say "hi"'
+    it._next_element_offset = 0
+    it._is_element_filter_iterator = True
+    assert it._QueryIterator__setup_next_expr() == 'doc_text >= "say \\\"hi\\\""'
+
+
+def test_search_iterator_filter_expr_plain_ids():
+    si = object.__new__(SearchIterator)
+    si._filtered_ids = ["a", "b"]
+    si._pk_str = True
+    si._pk_field_name = "doc_text"
+    result = si._SearchIterator__filtered_duplicated_result_expr(None)
+    assert result == 'doc_text not in ["a","b"]'
+
+
+def test_search_iterator_filter_expr_ids_with_quote():
+    si = object.__new__(SearchIterator)
+    si._filtered_ids = ['say "hi"']
+    si._pk_str = True
+    si._pk_field_name = "doc_text"
+    result = si._SearchIterator__filtered_duplicated_result_expr(None)
+    assert result == 'doc_text not in ["say \\\"hi\\\""]'
+
+
+def test_search_iterator_filter_expr_ids_with_newline():
+    si = object.__new__(SearchIterator)
+    si._filtered_ids = ["line\nbreak"]
+    si._pk_str = True
+    si._pk_field_name = "doc_text"
+    result = si._SearchIterator__filtered_duplicated_result_expr(None)
+    assert result == 'doc_text not in ["line\\nbreak"]'
+
+
+def test_cursor_dump_restore_roundtrip_with_newline():
+    it = _make_str_query_iterator()
+    it._next_id = "hello\nworld"
+    dumped = it._QueryIterator__dump_cursor_line()
+    it._next_id = None
+    it._QueryIterator__restore_cursor_line(dumped)
+    assert it._next_id == "hello\nworld"
+
+
+def test_cursor_dump_restore_roundtrip_with_quote():
+    it = _make_str_query_iterator()
+    it._next_id = 'say "hi"'
+    dumped = it._QueryIterator__dump_cursor_line()
+    it._next_id = None
+    it._QueryIterator__restore_cursor_line(dumped)
+    assert it._next_id == 'say "hi"'
