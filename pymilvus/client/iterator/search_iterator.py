@@ -44,7 +44,7 @@ from pymilvus.exceptions import (
     ServerVersionIncompatibleException,
 )
 
-from .query_iterator import NO_CACHE_ID, fall_back_to_latest_session_ts, iterator_cache
+from .query_iterator import NO_CACHE_ID, _escape_str_pk, fall_back_to_latest_session_ts, iterator_cache
 
 if TYPE_CHECKING:
     from pymilvus.client.call_context import CallContext
@@ -449,7 +449,8 @@ class SearchIterator:
         filtered_ids_str = ""
         for filtered_id in self._filtered_ids:
             if self._pk_str:
-                filtered_ids_str += f'"{filtered_id}",'
+                safe_id = _escape_str_pk(filtered_id)
+                filtered_ids_str += f'"{safe_id}",'
             else:
                 filtered_ids_str += f"{filtered_id},"
         filtered_ids_str = filtered_ids_str[0:-1]
