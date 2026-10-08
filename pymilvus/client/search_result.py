@@ -440,6 +440,7 @@ class Hits(list):
             for fname, (data, field_meta) in fields.items():
                 if len(data) <= i:
                     entity[fname] = None
+                    continue
                 # Get dense vectors
                 if is_dense_vector_type(field_meta.type):
                     dim = _dense_result_slice_width(field_meta.type, field_meta.vectors.dim)
