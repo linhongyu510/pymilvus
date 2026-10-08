@@ -36,6 +36,23 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
+def _escape_str_pk(value: str) -> str:
+    """Escape special characters in a VARCHAR primary key value for use in
+    double-quoted Milvus filter expressions.
+
+    Escapes backslash, double quote, newline, and carriage return so that
+    values containing these characters do not break the expression string.
+    Values without these characters are returned unchanged.
+    """
+    return (
+        str(value)
+        .replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
+    )
+
+
 class QueryIteratorHandler(Protocol):
     def describe_collection(self, collection_name: str, **kwargs: Any) -> Mapping[str, Any]: ...
 
@@ -269,7 +286,7 @@ class QueryIterator:
         self._query_options[MILVUS_LIMIT] = batch_size
 
     # rely on pk prop, so this method should be called after __setup__pk_prop
-    def __set_up_expr(self, expr: str):
+    def __set_up_expr(self, expr: str | None):
         if expr is not None:
             self._expr = expr
         elif self._pk_str:
@@ -278,7 +295,7 @@ class QueryIterator:
             self._expr = self._pk_field_name + " < " + str(INT64_MAX)
 
     @staticmethod
-    def __is_element_filter_expr(expr: str) -> bool:
+    def __is_element_filter_expr(expr: str | None) -> bool:
         return expr is not None and "element_filter" in expr.lower()
 
     def __setup_ts_by_request(self):
@@ -427,7 +444,8 @@ class QueryIterator:
         filtered_pk_str = ""
         pk_op = ">=" if self._has_element_cursor() else ">"
         if self._pk_str:
-            filtered_pk_str = f'{self._pk_field_name} {pk_op} "{self._next_id}"'
+            safe_next_id = _escape_str_pk(self._next_id)
+            filtered_pk_str = f'{self._pk_field_name} {pk_op} "{safe_next_id}"'
         else:
             filtered_pk_str = f"{self._pk_field_name} {pk_op} {self._next_id}"
         if current_expr is None or len(current_expr) == 0:
