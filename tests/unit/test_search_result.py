@@ -815,6 +815,27 @@ class TestHitsLegacy:
         )
         assert hits[0].entity["d1"] == 1
 
+    def test_hits_fewer_rows_than_topk_sets_none(self):
+        # When a field has fewer rows than topk, missing rows should get
+        # None instead of falling through to data[i] which raises IndexError.
+        field_meta = schema_pb2.FieldData(type=DataType.INT32, field_name="age")
+        fields = {"age": ([10, 20], field_meta)}  # only 2 elements, but topk=3
+
+        hits = Hits(
+            topk=3,
+            pks=[1, 2, 3],
+            distances=[0.1, 0.2, 0.3],
+            fields=fields,
+            output_fields=["age"],
+            pk_name="id",
+        )
+
+        assert hits[0].entity["age"] == 10
+        assert hits[1].entity["age"] == 20
+        # Without the `continue` fix, this raises IndexError because the code
+        # falls through to entity[fname] = data[i] where data[2] is out of bounds.
+        assert hits[2].entity["age"] is None
+
 
 class TestHelpers:
     """Test standalone helper functions in search_result.py"""
